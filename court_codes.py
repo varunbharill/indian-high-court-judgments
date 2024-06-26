@@ -1,0 +1,42 @@
+def transform_dict_values(input_dict):
+    """
+    Transforms the values of the input dictionary to lowercase and replaces spaces with underscores.
+
+    Args:
+        input_dict (dict): The original dictionary with string values.
+
+    Returns:
+        dict: A new dictionary with transformed values.
+    """
+    return {key: value.lower().replace(" ", "_") for key, value in input_dict.items()}
+
+
+COURT_CODES_ALL_RAW = {
+    # "9~13": "Allahabad High Court",
+    # "27~1": "Bombay High Court",
+    # "19~16": "Calcutta High Court",
+    # "18~6": "Gauhati High Court",
+    # "36~29": "High Court for State of Telangana",
+    # "28~2": "High Court of Andhra Pradesh",
+    # "22~18": "High Court of Chhattisgarh",
+    # "7~26": "High Court of Delhi",
+    # "24~17": "High Court of Gujarat",
+    # "2~5": "High Court of Himachal Pradesh",
+    # "1~12": "High Court of Jammu and Kashmir",
+    # "20~7": "High Court of Jharkhand",
+    # "29~3": "High Court of Karnataka",
+    # "32~4": "High Court of Kerala",
+    # "23~23": "High Court of Madhya Pradesh",
+    # "14~25": "High Court of Manipur",
+    # "17~21": "High Court of Meghalaya",
+    # "21~11": "High Court of Orissa",
+    # "3~22": "High Court of Punjab and Haryana",
+    "8~9": "High Court of Rajasthan",
+    # "11~24": "High Court of Sikkim",
+    # "16~20": "High Court of Tripura",
+    # "5~15": "High Court of Uttarakhand",
+    # "33~10": "Madras High Court",
+    # "10~8": "Patna High Court"
+}
+
+COURT_CODES_ALL = transform_dict_values(COURT_CODES_ALL_RAW)

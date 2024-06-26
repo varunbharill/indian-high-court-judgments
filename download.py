@@ -1,3 +1,5 @@
+from typing import Union
+
 from tqdm import tqdm
 from datetime import datetime, timedelta
 import traceback
@@ -12,9 +14,12 @@ import urllib
 import easyocr
 import pandas as pd
 
-import threading
+
 import concurrent.futures
 import urllib3
+from court_codes import COURT_CODES_ALL
+from utility import get_headers, get_new_date_range, extract_pdf_fragment, get_tracking_data, save_court_tracking_date, \
+    get_json_file, get_pdf_output_path, is_pdf_downloaded
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -30,42 +35,11 @@ pdf_link_payload = "val=0&lang_flg=undefined&path=cnrorders/taphc/orders/2017/HB
 
 page_size = 1000
 NO_CAPTCHA_BATCH_SIZE = 25
-lock = threading.Lock()
 MAX_WORKERS = 1
 
 
-def get_json_file(file_path) -> dict:
-    with open(file_path) as f:
-        return json.load(f)
-
-
-def get_court_codes():
-    court_codes = get_json_file("./court-codes.json")
-    return court_codes
-
-
-def get_tracking_data():
-    tracking_data = get_json_file("./track.json")
-    return tracking_data
-
-
-def save_tracking_data(tracking_data):
-    with open("./track.json", "w") as f:
-        json.dump(tracking_data, f)
-
-
-def save_court_tracking_date(court_code, court_tracking):
-    # acquire a lock
-    lock.acquire()
-    tracking_data = get_tracking_data()
-    tracking_data[court_code] = court_tracking
-    save_tracking_data(tracking_data)
-    # release the lock
-    lock.release()
-
-
 class Downloader:
-    def __init__(self, court_code):
+    def __init__(self, court_code_to_process):
         self.root_url = "https://judgments.ecourts.gov.in"
         self.search_url = f"{self.root_url}/pdfsearch/?p=pdf_search/home/"
         self.captcha_url = f"{self.root_url}/pdfsearch/vendor/securimage/securimage_show.php"  # not lint skip/
@@ -73,9 +47,9 @@ class Downloader:
         self.pdf_link_url = f"{self.root_url}/pdfsearch/?p=pdf_search/openpdfcaptcha"
         self.pdf_link_url_wo_captcha = f"{root_url}/pdfsearch/?p=pdf_search/openpdf"
 
-        self.court_code = court_code
+        self.court_code = court_code_to_process
         self.tracking_data = get_tracking_data()
-        self.court_codes = get_court_codes()
+        self.court_codes = COURT_CODES_ALL
         self.court_name = self.court_codes[self.court_code]
         self.court_tracking = self.tracking_data.get(self.court_code, {})
         self.session_cookie_name = "PHPSESSID"
@@ -94,9 +68,23 @@ class Downloader:
             traceback.print_exc()
             print("Error processing court", self.court_code, self.court_name)
 
+    def divide_list(self, lst, n=24):
+        """
+        Divides a list into n approximately equal sublists.
+
+        :param lst: List to be divided
+        :param n: Number of sublists
+        :return: A list of n sublists
+        """
+        if n <= 0:
+            raise ValueError("The number of sublists (n) must be greater than 0.")
+
+        k, m = divmod(len(lst), n)
+        return [lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
+
     def process_court(self):
         last_date = self.court_tracking.get("last_date", "2023-12-31")
-        from_date, to_date = self.get_new_date_range(last_date)
+        from_date, to_date = get_new_date_range(last_date)
         if from_date is None:
             print("No more data to download for: ", self.court_code, self.court_name)
             return
@@ -120,37 +108,38 @@ class Downloader:
                 ):
                     no_of_results = len(res_dict["reportrow"]["aaData"])
                     print("Found results", no_of_results)
-                    for idx, row in enumerate(res_dict["reportrow"]["aaData"]):
-                        try:
-                            is_pdf_downloaded = self.process_result_row(
-                                row, row_pos=idx
-                            )
-                            if is_pdf_downloaded:
-                                pdfs_downloaded += 1
-                            else:
-                                self.court_tracking["failed_dates"] = (
-                                    self.court_tracking.get("failed_dates", [])
+                    results_to_download = res_dict["reportrow"]["aaData"]
+                    downloading_workload = self.divide_list(results_to_download)
+                    for single_workload in (downloading_workload):
+                        for row in (single_workload):
+                            try:
+                                is_pdf_downloaded = self.process_result_row(
+                                    row, row_pos=-1
                                 )
-                                if from_date not in self.court_tracking["failed_dates"]:
-                                    self.court_tracking["failed_dates"].append(
-                                        from_date
+                                if is_pdf_downloaded:
+                                    pdfs_downloaded += 1
+                                else:
+                                    self.court_tracking["failed_dates"] = (
+                                        self.court_tracking.get("failed_dates", [])
                                     )
-                            if pdfs_downloaded >= NO_CAPTCHA_BATCH_SIZE:
-                                # after 25 downloads, need to solve captcha for every pdf link request. Starting with a fresh session would be faster so that we get another 25 downloads without captcha
-                                print(
-                                    f"Downloaded {NO_CAPTCHA_BATCH_SIZE} pdfs, starting with fresh session"
-                                )
-                                break
+                                    if from_date not in self.court_tracking["failed_dates"]:
+                                        self.court_tracking["failed_dates"].append(
+                                            from_date
+                                        )
+                                if pdfs_downloaded >= NO_CAPTCHA_BATCH_SIZE:
+                                    # after 25 downloads, need to solve captcha for every pdf link request. Starting with a fresh session would be faster so that we get another 25 downloads without captcha
+                                    print(
+                                        f"Downloaded {NO_CAPTCHA_BATCH_SIZE} pdfs, starting with fresh session"
+                                    )
+                                    pdfs_downloaded = 0
+                                    self.init_user_session()
+                                    search_payload["app_token"] = self.app_token
+                                    continue
+                            except Exception as e:
+                                print(e)
+                                traceback.print_stack(e)
+                                print("Error processing row", row)
 
-                        except Exception as e:
-                            print(e)
-                            traceback.print_stack(e)
-                            print("Error processing row", row)
-                    if pdfs_downloaded >= NO_CAPTCHA_BATCH_SIZE:
-                        pdfs_downloaded = 0
-                        self.init_user_session()
-                        search_payload["app_token"] = self.app_token
-                        continue
                     # prepare next iteration
                     search_payload["sEcho"] += 1
                     search_payload["iDisplayStart"] += page_size
@@ -159,7 +148,7 @@ class Downloader:
                     last_date = to_date
                     self.court_tracking["last_date"] = last_date
                     save_court_tracking_date(self.court_code, self.court_tracking)
-                    from_date, to_date = self.get_new_date_range(to_date)
+                    from_date, to_date = get_new_date_range(to_date)
                     if from_date is None:
                         print(
                             "No more data to download for: ",
@@ -188,8 +177,9 @@ class Downloader:
                     )  # TODO: should be all the dates from from_date to to_date in case step date > 1
                 save_court_tracking_date(self.court_code, self.court_tracking)
 
-    def process_result_row(self, row, row_pos):
+    def process_result_row(self, row, row_pos=-1):
         html = row[1]
+        row_pos = row[0] - 1
         soup = BeautifulSoup(html, "html.parser")
         # html_element = LH.fromstring(html)
         # why am I using both LH and BS4? idk.
@@ -203,76 +193,75 @@ class Downloader:
                 f.write(html + "\n")
             # TODO: requires special parsing
             return False
-        pdf_fragment = self.extract_pdf_fragment(soup.button["onclick"])
-        pdf_output_path = self.get_pdf_output_path(pdf_fragment)
-        is_pdf_downloaded = self.is_pdf_downloaded(pdf_fragment)
-        is_fresh_download = not is_pdf_downloaded
-        if not is_pdf_downloaded:
-            is_fresh_download = self.download_pdf(pdf_fragment, row_pos)
+        pdf_fragment = extract_pdf_fragment(html_attribute=soup.button["onclick"])
+        pdf_output_path = get_pdf_output_path(output_dir, pdf_fragment)
+        pdf_exit_already = is_pdf_downloaded(output_dir, pdf_fragment)
+        is_fresh_download_successful = not pdf_exit_already
+        print(f"Processing {pdf_output_path}, already downloaded: {pdf_exit_already}")
+        if not pdf_exit_already:
+            is_fresh_download_successful = self.download_pdf(pdf_fragment, row_pos)
         metadata_output = pdf_output_path.with_suffix(".json")
         metadata = {
             "court_code": self.court_code,
             "court_name": self.court_name,
             "raw_html": html,
-            # "title": title,
-            # "description": description,
-            # "case_details": case_details,
             "pdf_link": pdf_fragment,
-            "downloaded": is_pdf_downloaded or is_fresh_download,
+            "downloaded": is_fresh_download_successful or pdf_exit_already,
         }
         metadata_output.parent.mkdir(parents=True, exist_ok=True)
         with open(metadata_output, "w") as f:
             json.dump(metadata, f)
-        return is_fresh_download
+        return is_fresh_download_successful
 
     def download_pdf(self, pdf_fragment, row_pos):
         # prepare temp pdf request
-        pdf_output_path = self.get_pdf_output_path(pdf_fragment)
-        pdf_link_payload = self.default_pdf_link_payload()
-        pdf_link_payload["path"] = pdf_fragment
-        pdf_link_payload["val"] = row_pos
-        pdf_link_payload["app_token"] = self.app_token
-        pdf_link_response = self.request_api(
-            "POST", self.pdf_link_url, pdf_link_payload
-        )
-        if "outputfile" not in pdf_link_response.json():
-            print("Error downloading pdf", pdf_link_response.json())
-            return False
-        pdf_download_link = pdf_link_response.json()["outputfile"]
+        try:
+            print("download start")
+            pdf_output_path = get_pdf_output_path(output_dir, pdf_fragment)
+            pdf_link_payload = self.default_pdf_link_payload()
+            pdf_link_payload["path"] = pdf_fragment
+            pdf_link_payload["val"] = row_pos
+            pdf_link_payload["app_token"] = self.app_token
+            pdf_link_response = self.request_api(
+                "POST", self.pdf_link_url, pdf_link_payload
+            )
+            if "outputfile" not in pdf_link_response.json():
+                print("Error downloading pdf", pdf_link_response.json())
+                return False
+            pdf_download_link = pdf_link_response.json()["outputfile"]
 
-        # download pdf and save
-        pdf_response = requests.request(
-            "GET",
-            root_url + pdf_download_link,
-            verify=False,
-            headers=self.get_headers(),
-        )
-        pdf_output_path.parent.mkdir(parents=True, exist_ok=True)
-        # number of response butes
-        no_of_bytes = len(pdf_response.content)
-        if no_of_bytes == 0:
-            print("Empty pdf", pdf_output_path)
+            # download pdf and save
+            pdf_response = requests.request(
+                "GET",
+                root_url + pdf_download_link,
+                verify=False,
+                headers=get_headers(cookie=self.get_cookie(), root_url=self.root_url),
+                timeout=5,
+            )
+            pdf_output_path.parent.mkdir(parents=True, exist_ok=True)
+            # number of response butes
+            no_of_bytes = len(pdf_response.content)
+            if no_of_bytes == 0:
+                print("Empty pdf", pdf_output_path)
+                return False
+            if no_of_bytes == 315:
+                print("404 pdf response")
+                return False
+            with open(pdf_output_path, "wb") as f:
+                f.write(pdf_response.content)
+                f.flush()
+            print(f"Downloaded {pdf_output_path}, size: {no_of_bytes}")
+            return True
+        except Exception as e:
+            print(e)
+            print("Error downloading pdf")
             return False
-        if no_of_bytes == 315:
-            print("404 pdf response")
-            return False
-        with open(pdf_output_path, "wb") as f:
-            f.write(pdf_response.content)
-        print(f"Downloaded {pdf_output_path}, size: {no_of_bytes}")
-        return True
 
-    def update_headers_with_new_session(self, headers):
-        cookie = SimpleCookie()
-        cookie.load(headers["Cookie"])
-        cookie[self.session_cookie_name] = self.session_id
-        headers["Cookie"] = cookie.output(header="", sep=";").strip()
-
-    def extract_pdf_fragment(self, html_attribute):
-        pattern = r"javascript:open_pdf\('.*?','.*?','(.*?)'\)"
-        match = re.search(pattern, html_attribute)
-        if match:
-            return match.group(1).split("#")[0]
-        return None
+    # def update_headers_with_new_session(self, headers):
+    #     cookie = SimpleCookie()
+    #     cookie.load(headers["Cookie"])
+    #     cookie[self.session_cookie_name] = self.session_id
+    #     headers["Cookie"] = cookie.output(header="", sep=";").strip()
 
     def solve_captcha(self, retries=0, captcha_url=None):
         if captcha_url is None:
@@ -339,7 +328,7 @@ class Downloader:
         res = requests.request(
             "POST",
             self.captcha_token_url,
-            headers=self.get_headers(),
+            headers=get_headers(self.get_cookie(), self.root_url),
             data=captcha_check_payload,
             verify=False,
         )
@@ -349,13 +338,7 @@ class Downloader:
         print("Refreshed token")
 
     def request_api(self, method, url, payload, **kwargs):
-        headers = self.get_headers()
-        # print(
-        #     "api_request",
-        #     session_id,
-        #     payload.get("app_token") if payload else None,
-        #     url,
-        # )
+        headers = get_headers(self.get_cookie(), self.root_url)
         response = requests.request(
             method,
             url,
@@ -398,16 +381,6 @@ class Downloader:
 
         return response
 
-    def get_pdf_output_path(self, pdf_fragment):
-        return output_dir / pdf_fragment.split("#")[0]
-
-    def is_pdf_downloaded(self, pdf_fragment):
-        pdf_metadata_path = self.get_pdf_output_path(pdf_fragment).with_suffix(".json")
-        if pdf_metadata_path.exists():
-            pdf_metadata = get_json_file(pdf_metadata_path)
-            return pdf_metadata["downloaded"]
-        return False
-
     def get_search_url(self):
         return f"{self.root_url}/pdfsearch/?p=pdf_search/home/"
 
@@ -439,44 +412,9 @@ class Downloader:
         if new_session_cookie:
             self.session_id = new_session_cookie
 
-    def get_new_date_range(self, last_date: str) -> tuple[str | None, str | None]:
-        day_step = 1
-        last_date_dt = datetime.strptime(last_date, "%Y-%m-%d")
-        new_from_date_dt = last_date_dt + timedelta(days=1)
-        new_to_date_dt = new_from_date_dt + timedelta(days=day_step - 1)
-        if new_from_date_dt.date() > datetime.now().date():
-            return None, None
-
-        if new_to_date_dt.date() > datetime.now().date():
-            new_to_date_dt = datetime.now().date()
-        new_from_date = new_from_date_dt.strftime("%Y-%m-%d")
-        new_to_date = new_to_date_dt.strftime("%Y-%m-%d")
-        return new_from_date, new_to_date
-
-    def get_headers(self):
-        headers = {
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Accept-Language": "en-US,en;q=0.9,pt;q=0.8",
-            "Connection": "keep-alive",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Cookie": self.get_cookie(),
-            "DNT": "1",
-            "Origin": self.root_url,
-            "Referer": self.root_url + "/",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "X-Requested-With": "XMLHttpRequest",
-            "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"macOS"',
-        }
-        return headers
-
 
 def run():
-    court_codes = get_court_codes()
+    court_codes = COURT_CODES_ALL
 
     def process(court_code):
         try:
@@ -486,14 +424,8 @@ def run():
             traceback.print_exc()
             print("Error processing court", court_code, court_codes[court_code])
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = []
-        for code, name in court_codes.items():
-            futures.append(executor.submit(process, code))
-
-        for future in concurrent.futures.as_completed(futures):
-            res = future.result()
-
+    for code, name in court_codes.items():
+        process(code)
 
 if __name__ == "__main__":
     run()
