@@ -6,7 +6,8 @@ from typing import Union
 import threading
 
 lock = threading.Lock()
-
+payload = "&sEcho=1&iColumns=2&sColumns=,&iDisplayStart=0&iDisplayLength=100&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=asc&iSortingCols=1&search_txt1=&search_txt2=&search_txt3=&search_txt4=&search_txt5=&pet_res=&state_code=27~1&state_code_li=&dist_code=null&case_no=&case_year=&from_date=&to_date=&judge_name=&reg_year=&fulltext_case_type=&int_fin_party_val=undefined&int_fin_case_val=undefined&int_fin_court_val=undefined&int_fin_decision_val=undefined&act=&sel_search_by=undefined&sections=undefined&judge_txt=&act_txt=&section_txt=&judge_val=&act_val=&year_val=&judge_arr=&flag=&disp_nature=&search_opt=PHRASE&date_val=ALL&fcourt_type=2&citation_yr=&citation_vol=&citation_supl=&citation_page=&case_no1=&case_year1=&pet_res1=&fulltext_case_type1=&citation_keyword=&sel_lang=&proximity=&neu_cit_year=&neu_no=&ajax_req=true&app_token=1fbc7fbb840eb95975c684565909fe6b3b82b8119472020ff10f40c0b1c901fe"
+page_size = 1000
 
 def get_headers(cookie, root_url):
     headers = {
@@ -89,8 +90,18 @@ def is_pdf_downloaded(output_dir, pdf_fragment):
         return pdf_metadata["downloaded"]
     return False
 
+
 def default_pdf_link_payload():
     pdf_link_payload = "val=0&lang_flg=undefined&path=cnrorders/taphc/orders/2017/HBHC010262202017_1_2047-06-29.pdf#page=&search=+&citation_year=&fcourt_type=2&file_type=undefined&nc_display=undefined&ajax_req=true&app_token=c64944b84c687f501f9692e239e2a0ab007eabab497697f359a2f62e4fcd3d10"
     pdf_link_payload_o = urllib.parse.parse_qs(pdf_link_payload)
     pdf_link_payload_o = {k: v[0] for k, v in pdf_link_payload_o.items()}
     return pdf_link_payload_o
+
+
+def default_search_payload():
+    search_payload = urllib.parse.parse_qs(payload)
+    search_payload = {k: v[0] for k, v in search_payload.items()}
+    search_payload["sEcho"] = 1
+    search_payload["iDisplayStart"] = 0
+    search_payload["iDisplayLength"] = page_size
+    return search_payload
