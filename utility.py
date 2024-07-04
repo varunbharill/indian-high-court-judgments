@@ -1,5 +1,6 @@
 import json
 import re
+import traceback
 import urllib
 from datetime import datetime, timedelta
 from typing import Union
@@ -60,13 +61,18 @@ def get_json_file(file_path) -> dict:
 
 
 def get_tracking_data(with_lock=False):
-    if with_lock:
-        lock.acquire()
-        tracking_data = get_json_file("./track.json")
-        lock.release()
-    else:
-        tracking_data = get_json_file("./track.json")
-    return tracking_data
+    try:
+        if with_lock:
+            lock.acquire()
+            tracking_data = get_json_file("./track.json")
+            lock.release()
+        else:
+            tracking_data = get_json_file("./track.json")
+        return tracking_data
+    except Exception as e:
+        traceback.print_exc()
+        print(e, "couldn't load tracking data")
+        return {}
 
 
 def save_tracking_data(tracking_data):
@@ -76,14 +82,19 @@ def save_tracking_data(tracking_data):
 
 def save_court_tracking_date(court_code, court_tracking):
     # acquire a lock
-    lock.acquire()
-    tracking_data = get_tracking_data()
-    all_date_dict = tracking_data.get(court_code, {})
-    all_date_dict[court_tracking["from_date"] + "-" + court_tracking["to_date"]] = court_tracking
-    tracking_data[court_code] = all_date_dict
-    save_tracking_data(tracking_data)
-    # release the lock
-    lock.release()
+    try:
+        lock.acquire()
+        tracking_data = get_tracking_data()
+        all_date_dict = tracking_data.get(court_code, {})
+        all_date_dict[court_tracking["from_date"] + "-" + court_tracking["to_date"]] = court_tracking
+        tracking_data[court_code] = all_date_dict
+        save_tracking_data(tracking_data)
+        # release the lock
+        lock.release()
+    except Exception as e:
+        traceback.print_exc()
+        print("error saving tracking data", e)
+
 
 
 def get_pdf_output_path(output_dir, pdf_fragment):

@@ -43,8 +43,8 @@ class BatchDownloader:
 
         if not (soup.button and "onclick" in soup.button.attrs):
             print("No button found, likely multi language judgment")
-            with open("html-parse-failures.txt", "a") as f:
-                f.write(html + "\n")
+            # with open("html-parse-failures.txt", "a") as f:
+            #     f.write(html + "\n")
             # TODO: requires special parsing
             return False, False
         pdf_fragment = extract_pdf_fragment(html_attribute=soup.button["onclick"])

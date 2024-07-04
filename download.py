@@ -181,6 +181,7 @@ class Downloader:
                     #     )
 
             except Exception as e:
+                traceback.print_exc()
                 print("Error when looping of days/pages and downloading", e, self.thread_no)
                 if "Invalid Captcha" in str(e):
                     print("Initializing new session", self.thread_no)
@@ -376,6 +377,7 @@ def run():
 
     start_date = input("Enter start date: \n")
     end_date = input("Enter end date: \n")
+
     court_code = "8~9"
     i = 0
 
