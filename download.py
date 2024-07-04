@@ -374,8 +374,8 @@ def run():
     court_codes = COURT_CODES_ALL
     print("enter start date in format yyyy-mm-dd")
 
-    start_date = "2024-03-01"
-    end_date = "2024-03-03"
+    start_date = input("Enter start date: \n")
+    end_date = input("Enter end date: \n")
     court_code = "8~9"
     i = 0
 
