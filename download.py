@@ -112,7 +112,7 @@ class Downloader:
 
         while results_available:
             try:
-                print("performing search.")
+                print("performing search.", self.thread_no)
                 response = self.request_api("POST", self.search_url, search_payload)
                 res_dict = response.json()
                 if (
@@ -125,7 +125,7 @@ class Downloader:
                         self.pages_found_so_far = search_payload["sEcho"]
                         self.docs_found_so_far += no_of_results
 
-                    print("Found results", no_of_results, from_date, to_date)
+                    print("Found results", no_of_results, from_date, to_date, self.thread_no)
                     results_to_download = res_dict["reportrow"]["aaData"]
                     # results_to_download = results_to_download[1:3]
                     downloading_workload = self.divide_list(results_to_download)
@@ -147,9 +147,9 @@ class Downloader:
                     # prepare next iteration
                     search_payload["sEcho"] += 1
                     search_payload["iDisplayStart"] += page_size
-                    print("Next iteration: ", search_payload["iDisplayStart"])
+                    print("Next iteration: ", search_payload["iDisplayStart"], self.thread_no)
                 else:
-                    print("downloaded completed for ", self.court_code, self.court_name, self.start_date, self.end_date)
+                    print("downloaded completed for ", self.court_code, self.court_name, self.start_date, self.end_date, self.thread_no)
                     self.court_tracking["from_date"] = from_date
                     self.court_tracking["to_date"] = to_date
                     self.court_tracking["docs_to_download"] = self.docs_found_so_far
@@ -181,13 +181,13 @@ class Downloader:
                     #     )
 
             except Exception as e:
-                print("Error when looping of days/pages and downloading", e)
+                print("Error when looping of days/pages and downloading", e, self.thread_no)
                 if "Invalid Captcha" in str(e):
-                    print("Initializing new session")
+                    print("Initializing new session", self.thread_no)
                     self.init_user_session()
                     search_payload["state_code"] = self.court_code
                     search_payload["app_token"] = self.app_token
-                    print("session initialized and searching again.")
+                    print("session initialized and searching again.", self.thread_no)
                 # self.court_tracking["failed_dates"] = self.court_tracking.get(
                 #     "failed_dates", []
                 # )
@@ -205,7 +205,7 @@ class Downloader:
                 self.court_tracking["full_download_refresh"] = self.full_download_refresh
                 self.court_tracking["total_pages"] = self.pages_found_so_far
                 save_court_tracking_date(self.court_code, self.court_tracking)
-                print("tracking data saved.")
+                print("tracking data saved.", self.thread_no)
 
     # def update_headers_with_new_session(self, headers):
     #     cookie = SimpleCookie()
@@ -355,9 +355,9 @@ class Downloader:
             self.session_id = res.cookies.get(self.session_cookie_name)
             self.ecourts_token = res.cookies.get(self.ecourts_token_cookie_name)
         except Exception as e:
-            print("Error when initializing session", e)
+            print("Error when initializing session", e, self.thread_no)
             if retries < 3:
-                print("Retrying session initialization")
+                print("Retrying session initialization", self.thread_no)
                 self.init_user_session(retries + 1)
 
 
