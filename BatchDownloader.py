@@ -46,7 +46,7 @@ class BatchDownloader:
             with open("html-parse-failures.txt", "a") as f:
                 f.write(html + "\n")
             # TODO: requires special parsing
-            return False
+            return False, False
         pdf_fragment = extract_pdf_fragment(html_attribute=soup.button["onclick"])
         pdf_output_path = get_pdf_output_path(self.output_dir, pdf_fragment)
         pdf_exit_already = is_pdf_downloaded(self.output_dir, pdf_fragment)
@@ -231,7 +231,7 @@ class BatchDownloader:
         with open(pdf_output_path, "wb") as f:
             f.write(pdf_response.content)
             f.flush()
-        print(f"Downloaded {pdf_output_path}, size: {no_of_bytes}")
+        print(f"Downloaded {pdf_output_path}, size: {no_of_bytes}", self.thread_no)
         return True
 
     def init_user_session(self):
