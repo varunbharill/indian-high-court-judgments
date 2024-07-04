@@ -264,5 +264,5 @@ class BatchDownloader:
                 if "Invalid Captcha" in str(e):
                     raise Exception(f"Invalid Captcha. Raising this exception to retry from the top level which calls request_api, {self.thread_no}")
                 print(e)
-                traceback.print_stack(e)
+                traceback.print_exc()
                 print(f"Error processing row, thread no - {self.thread_no}", row)
