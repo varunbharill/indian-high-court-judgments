@@ -56,7 +56,7 @@ class Downloader:
         self.pdf_link_url_wo_captcha = f"{root_url}/pdfsearch/?p=pdf_search/openpdf"
 
         self.court_code = court_code_to_process
-        self.tracking_data = get_tracking_data()
+        self.tracking_data = get_tracking_data(with_lock=True)
         self.court_codes = COURT_CODES_ALL
         self.court_name = self.court_codes[self.court_code]
         # self.court_tracking = self.tracking_data.get(self.court_code, {})
@@ -386,7 +386,7 @@ def run():
             traceback.print_exc()
             print("Error processing court", court_code, court_codes[court_code])
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as executor:
         futures = []
         all_dates = generate_date_tuples(start_date, end_date)
 

@@ -59,8 +59,13 @@ def get_json_file(file_path) -> dict:
         return json.load(f)
 
 
-def get_tracking_data():
-    tracking_data = get_json_file("./track.json")
+def get_tracking_data(with_lock=False):
+    if with_lock:
+        lock.acquire()
+        tracking_data = get_json_file("./track.json")
+        lock.release()
+    else:
+        tracking_data = get_json_file("./track.json")
     return tracking_data
 
 
