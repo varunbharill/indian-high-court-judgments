@@ -73,7 +73,9 @@ def save_court_tracking_date(court_code, court_tracking):
     # acquire a lock
     lock.acquire()
     tracking_data = get_tracking_data()
-    tracking_data[court_code] = court_tracking
+    all_date_dict = tracking_data.get(court_code, {})
+    all_date_dict[court_tracking["from_date"] + "-" + court_tracking["to_date"]] = court_tracking
+    tracking_data[court_code] = all_date_dict
     save_tracking_data(tracking_data)
     # release the lock
     lock.release()
@@ -105,3 +107,21 @@ def default_search_payload():
     search_payload["iDisplayStart"] = 0
     search_payload["iDisplayLength"] = page_size
     return search_payload
+
+
+def generate_date_tuples(start_date, end_date):
+    # Convert string dates to datetime objects
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    # Initialize an empty list to store the tuples
+    date_tuples = []
+
+    # Generate dates from start to end, inclusive
+    current_date = start
+    while current_date < end:
+        next_date = current_date + timedelta(days=1)
+        date_tuples.append((current_date.strftime("%Y-%m-%d"), next_date.strftime("%Y-%m-%d")))
+        current_date = next_date
+
+    return date_tuples

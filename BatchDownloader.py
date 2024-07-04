@@ -12,7 +12,8 @@ import lxml.html as LH
 
 
 class BatchDownloader:
-    def __init__(self, fragment_list, output_dir, court_code, court_name, ecourts_token_cookie_name, app_token, session_id, session_cookie_name, ecourts_token):
+    def __init__(self, fragment_list, output_dir, court_code, court_name, ecourts_token_cookie_name, app_token, session_id, session_cookie_name, ecourts_token, thread_no):
+        self.thread_no = thread_no
         self.app_token = app_token
         self.session_id = session_id
         self.session_cookie_name = session_cookie_name
@@ -21,7 +22,6 @@ class BatchDownloader:
         self.fragment_list = fragment_list
         self.total = len(fragment_list)
         self.existing = 0
-        self.fresh_downloads = 0
         self.output_dir = output_dir
         self.court_code = court_code
         self.court_name = court_name
@@ -30,6 +30,8 @@ class BatchDownloader:
         self.captcha_url = f"{root_url}/pdfsearch/vendor/securimage/securimage_show.php"  # not lint skip/
         self.pdf_link_url_wo_captcha = f"{root_url}/pdfsearch/?p=pdf_search/openpdf"
         self.search_url = f"{root_url}/pdfsearch/?p=pdf_search/home/"
+        self.pdf_already_exists = 0
+        self.pdf_fresh_downloaded = 0
 
     def get_cookie(self):
         return f"{self.ecourts_token_cookie_name}={self.ecourts_token}; {self.session_cookie_name}={self.session_id}"
@@ -62,7 +64,7 @@ class BatchDownloader:
         metadata_output.parent.mkdir(parents=True, exist_ok=True)
         with open(metadata_output, "w") as f:
             json.dump(metadata, f)
-        return is_fresh_download_successful
+        return pdf_exit_already, is_fresh_download_successful
 
     def update_session_id(self, response):
         new_session_cookie = response.cookies.get(self.session_cookie_name)
@@ -76,7 +78,7 @@ class BatchDownloader:
         captcha_response = requests.get(
             captcha_url, headers={"Cookie": self.get_cookie()}, verify=False, timeout=10
         )
-        captcha_filename = f"/tmp/captcha{self.court_code}.png"
+        captcha_filename = f"/tmp/captcha{self.court_code}-{self.thread_no}.png"
         with open(captcha_filename, "wb") as f:
             f.write(captcha_response.content)
         result = reader.readtext(captcha_filename)
@@ -92,8 +94,8 @@ class BatchDownloader:
         return captch_text
 
     def refresh_token(self, with_app_token=False):
-        print("Current session id ", self.session_id)
-        print("Current token ", self.app_token)
+        # print("Current session id ", self.session_id)
+        # print("Current token ", self.app_token)
         captcha_text = self.solve_captcha()
         captcha_check_payload = {
             "captcha": captcha_text,
@@ -200,7 +202,10 @@ class BatchDownloader:
             "POST", self.pdf_link_url, pdf_link_payload
         )
         if "outputfile" not in pdf_link_response.json():
-            print("Error downloading pdf", pdf_link_response.json())
+            response = pdf_link_response.json()
+            print("Error downloading pdf", response)
+            if response.get("message") == "Invalid Captcha":
+                raise Exception("Invalid Captcha. Raising this exception to retry from the top level which calls request_api")
             return False
         pdf_download_link = pdf_link_response.json()["outputfile"]
 
@@ -217,7 +222,9 @@ class BatchDownloader:
         no_of_bytes = len(pdf_response.content)
         if no_of_bytes == 0:
             print("Empty pdf", pdf_output_path)
-            return False
+            raise Exception(
+                "Invalid Captcha. Raising this exception to retry from the top level which calls request_api")
+            # return False
         if no_of_bytes == 315:
             print("404 pdf response")
             return False
@@ -229,25 +236,33 @@ class BatchDownloader:
 
     def init_user_session(self):
         res = requests.request(
-            "GET", "https://judgments.ecourts.gov.in/pdfsearch/", verify=False
+            "GET", "https://judgments.ecourts.gov.in/pdfsearch/", verify=False, timeout=10
         )
         self.session_id = res.cookies.get(self.session_cookie_name)
         self.ecourts_token = res.cookies.get(self.ecourts_token_cookie_name)
 
     def download_all(self):
-        search_payload = default_search_payload()
-        search_payload["from_date"] = "2023-12-30"
-        search_payload["to_date"] = "2023-12-31"
-        self.init_user_session()
-        search_payload["state_code"] = self.court_code
-        search_payload["app_token"] = self.app_token
-        response = self.request_api("POST", self.search_url, search_payload)
+        # search_payload = default_search_payload()
+        # search_payload["from_date"] = "2023-12-30"
+        # search_payload["to_date"] = "2023-12-31"
+        # self.init_user_session()
+        # search_payload["state_code"] = self.court_code
+        # search_payload["app_token"] = self.app_token
+        # response = self.request_api("POST", self.search_url, search_payload)
         for row in self.fragment_list:
             try:
-                is_pdf_downloaded = self.process_result_row(
+                pdf_exit_already, is_fresh_download_successful = self.process_result_row(
                     row, row_pos=-1
                 )
+                if pdf_exit_already:
+                    self.pdf_already_exists += 1
+
+                if is_fresh_download_successful:
+                    self.pdf_fresh_downloaded += 1
+
             except Exception as e:
+                if "Invalid Captcha" in str(e):
+                    raise Exception("Invalid Captcha. Raising this exception to retry from the top level which calls request_api")
                 print(e)
                 traceback.print_stack(e)
                 print("Error processing row", row)

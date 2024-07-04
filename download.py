@@ -20,7 +20,7 @@ import urllib3
 
 from court_codes import COURT_CODES_ALL
 from utility import get_headers, get_new_date_range, extract_pdf_fragment, get_tracking_data, save_court_tracking_date, \
-    get_json_file, get_pdf_output_path, is_pdf_downloaded, default_search_payload
+    get_json_file, get_pdf_output_path, is_pdf_downloaded, default_search_payload, generate_date_tuples
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -44,7 +44,10 @@ def start_download(downloader):
 
 # from BatchDownloader import BatchDownloader
 class Downloader:
-    def __init__(self, court_code_to_process):
+    def __init__(self, court_code_to_process, start_date, end_date, thread_no):
+        self.thread_no = thread_no
+        self.start_date = start_date
+        self.end_date = end_date
         self.root_url = "https://judgments.ecourts.gov.in"
         self.search_url = f"{self.root_url}/pdfsearch/?p=pdf_search/home/"
         self.captcha_url = f"{self.root_url}/pdfsearch/vendor/securimage/securimage_show.php"  # not lint skip/
@@ -56,7 +59,8 @@ class Downloader:
         self.tracking_data = get_tracking_data()
         self.court_codes = COURT_CODES_ALL
         self.court_name = self.court_codes[self.court_code]
-        self.court_tracking = self.tracking_data.get(self.court_code, {})
+        # self.court_tracking = self.tracking_data.get(self.court_code, {})
+        self.court_tracking = {}
         self.session_cookie_name = "PHPSESSID"
         self.ecourts_token_cookie_name = "JSESSION"
         self.session_id = None
@@ -64,6 +68,11 @@ class Downloader:
         self.app_token = (
             "490a7e9b99e4553980213a8b86b3235abc51612b038dbdb1f9aa706b633bbd6c"
         )
+        self.docs_found_so_far = 0
+        self.pages_found_so_far = 0
+        self.pdf_already_exists = 0
+        self.pdf_fresh_downloaded = 0
+        self.full_download_refresh = 0
 
     def download(self):
         try:
@@ -88,8 +97,8 @@ class Downloader:
         return [lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
 
     def process_court(self):
-        last_date = self.court_tracking.get("last_date", "2023-12-31")
-        from_date, to_date = get_new_date_range(last_date)
+        # last_date = self.court_tracking.get("last_date", "2023-12-31")
+        from_date, to_date = self.start_date, self.end_date
         if from_date is None:
             print("No more data to download for: ", self.court_code, self.court_name)
             return
@@ -100,10 +109,10 @@ class Downloader:
         search_payload["state_code"] = self.court_code
         search_payload["app_token"] = self.app_token
         results_available = True
-        pdfs_downloaded = 0
 
         while results_available:
             try:
+                print("performing search.")
                 response = self.request_api("POST", self.search_url, search_payload)
                 res_dict = response.json()
                 if (
@@ -112,8 +121,13 @@ class Downloader:
                         and len(res_dict["reportrow"]["aaData"]) > 0
                 ):
                     no_of_results = len(res_dict["reportrow"]["aaData"])
+                    if search_payload["sEcho"] != self.pages_found_so_far:
+                        self.pages_found_so_far = search_payload["sEcho"]
+                        self.docs_found_so_far += no_of_results
+
                     print("Found results", no_of_results, from_date, to_date)
                     results_to_download = res_dict["reportrow"]["aaData"]
+                    # results_to_download = results_to_download[1:3]
                     downloading_workload = self.divide_list(results_to_download)
                     from BatchDownloader import BatchDownloader
                     downloader_list = []
@@ -121,49 +135,77 @@ class Downloader:
                         # self.refresh_token()
                         batch_download = BatchDownloader(single_workload, output_dir, self.court_code, self.court_name,
                                                          self.ecourts_token_cookie_name, self.app_token,
-                                                         self.session_id, self.session_cookie_name, self.ecourts_token)
-                        downloader_list.append(batch_download)
+                                                         self.session_id, self.session_cookie_name, self.ecourts_token, self.thread_no)
+                        batch_download.download_all()
+                        self.pdf_already_exists += batch_download.pdf_already_exists
+                        self.pdf_fresh_downloaded += batch_download.pdf_fresh_downloaded
 
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                        futures = [executor.submit(start_download, downloader) for downloader in downloader_list]
-                        concurrent.futures.wait(futures)
+                    # with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    #     futures = [executor.submit(start_download, downloader) for downloader in downloader_list]
+                    #     concurrent.futures.wait(futures)
 
                     # prepare next iteration
                     search_payload["sEcho"] += 1
                     search_payload["iDisplayStart"] += page_size
                     print("Next iteration: ", search_payload["iDisplayStart"])
                 else:
-                    last_date = to_date
-                    self.court_tracking["last_date"] = last_date
+                    print("downloaded completed for ", self.court_code, self.court_name, self.start_date, self.end_date)
+                    self.court_tracking["from_date"] = from_date
+                    self.court_tracking["to_date"] = to_date
+                    self.court_tracking["docs_to_download"] = self.docs_found_so_far
+                    self.court_tracking["pdf_already_exists"] = self.pdf_already_exists
+                    self.court_tracking["pdf_fresh_downloaded"] = self.pdf_fresh_downloaded
+                    self.court_tracking["full_download_refresh"] = self.full_download_refresh
+                    self.court_tracking["total_pages"] = self.pages_found_so_far
                     save_court_tracking_date(self.court_code, self.court_tracking)
-                    from_date, to_date = get_new_date_range(to_date)
-                    if from_date is None:
-                        print(
-                            "No more data to download for: ",
-                            self.court_code,
-                            self.court_name,
-                        )
-                        results_available = False
-                    else:
-                        search_payload["from_date"] = from_date
-                        search_payload["to_date"] = to_date
-                        search_payload["sEcho"] = 1
-                        search_payload["iDisplayStart"] = 0
-                        search_payload["iDisplayLength"] = page_size
-                        print(
-                            f"Downloading data for: {self.court_code}, court: {self.court_name}, from: {from_date},to: {to_date}"
-                        )
+                    break
+                    # last_date = to_date
+                    # self.court_tracking["last_date"] = last_date
+                    # save_court_tracking_date(self.court_code, self.court_tracking)
+                    # from_date, to_date = get_new_date_range(to_date)
+                    # if from_date is None:
+                    #     print(
+                    #         "No more data to download for: ",
+                    #         self.court_code,
+                    #         self.court_name,
+                    #     )
+                    #     results_available = False
+                    # else:
+                    #     search_payload["from_date"] = from_date
+                    #     search_payload["to_date"] = to_date
+                    #     search_payload["sEcho"] = 1
+                    #     search_payload["iDisplayStart"] = 0
+                    #     search_payload["iDisplayLength"] = page_size
+                    #     print(
+                    #         f"Downloading data for: {self.court_code}, court: {self.court_name}, from: {from_date},to: {to_date}"
+                    #     )
 
             except Exception as e:
                 print("Error when looping of days/pages and downloading", e)
-                self.court_tracking["failed_dates"] = self.court_tracking.get(
-                    "failed_dates", []
-                )
-                if from_date not in self.court_tracking["failed_dates"]:
-                    self.court_tracking["failed_dates"].append(
-                        from_date
-                    )  # TODO: should be all the dates from from_date to to_date in case step date > 1
+                if "Invalid Captcha" in str(e):
+                    print("Initializing new session")
+                    self.init_user_session()
+                    search_payload["state_code"] = self.court_code
+                    search_payload["app_token"] = self.app_token
+                    print("session initialized and searching again.")
+                # self.court_tracking["failed_dates"] = self.court_tracking.get(
+                #     "failed_dates", []
+                # )
+                # if from_date not in self.court_tracking["failed_dates"]:
+                #     self.court_tracking["failed_dates"].append(
+                #         from_date
+                #     )  # TODO: should be all the dates from from_date to to_date in case step date > 1
+                self.full_download_refresh += 1
+                self.court_tracking["full_download_refresh"] = self.full_download_refresh
+                self.court_tracking["from_date"] = from_date
+                self.court_tracking["to_date"] = to_date
+                self.court_tracking["docs_to_download"] = self.docs_found_so_far
+                self.court_tracking["pdf_already_exists"] = self.pdf_already_exists
+                self.court_tracking["pdf_fresh_downloaded"] = self.pdf_fresh_downloaded
+                self.court_tracking["full_download_refresh"] = self.full_download_refresh
+                self.court_tracking["total_pages"] = self.pages_found_so_far
                 save_court_tracking_date(self.court_code, self.court_tracking)
+                print("tracking data saved.")
 
     # def update_headers_with_new_session(self, headers):
     #     cookie = SimpleCookie()
@@ -175,11 +217,11 @@ class Downloader:
         if captcha_url is None:
             captcha_url = self.captcha_url
         # download captch image and save
-        time.sleep(10 * retries)
+        time.sleep(5 * retries)
         captcha_response = requests.get(
             captcha_url, headers={"Cookie": self.get_cookie()}, verify=False
         )
-        captcha_filename = f"/tmp/captcha{self.court_code}.png"
+        captcha_filename = f"/tmp/captcha{self.court_code}-{self.thread_no}.png"
         with open(captcha_filename, "wb") as f:
             f.write(captcha_response.content)
         result = reader.readtext(captcha_filename)
@@ -205,7 +247,7 @@ class Downloader:
         img_src = html.xpath("//img[@id='captcha_image_pdf']/@src")[0]
         img_src = root_url + img_src
         # download captch image and save
-        time.sleep(10 * retries)
+        time.sleep(5 * retries)
         try:
             captcha_text = self.solve_captcha(captcha_url=img_src)
             pdf_link_payload["captcha1"] = captcha_text
@@ -231,9 +273,10 @@ class Downloader:
             )
 
     def refresh_token(self, with_app_token=False):
-        print("Current session id ", self.session_id)
-        print("Current token ", self.app_token)
+        # print("Current session id ", self.session_id)
+        # print("Current token ", self.app_token)
         captcha_text = self.solve_captcha()
+        # print("Captcha text ", captcha_text)
         captcha_check_payload = {
             "captcha": captcha_text,
             "search_opt": "PHRASE",
@@ -253,8 +296,8 @@ class Downloader:
         self.app_token = res_json["app_token"]
         self.update_session_id(res)
         print("Refreshed token")
-        print("new session id ", self.session_id)
-        print("new token ", self.app_token)
+        # print("new session id ", self.session_id)
+        # print("new token ", self.app_token)
 
 
     def request_api(self, method, url, payload, **kwargs):
@@ -265,7 +308,7 @@ class Downloader:
             headers=headers,
             data=payload,
             **kwargs,
-            timeout=60,
+            timeout=10,
             verify=False,
         )
         # if response is json
@@ -304,12 +347,19 @@ class Downloader:
         pdf_link_payload_o = {k: v[0] for k, v in pdf_link_payload_o.items()}
         return pdf_link_payload_o
 
-    def init_user_session(self):
-        res = requests.request(
-            "GET", "https://judgments.ecourts.gov.in/pdfsearch/", verify=False
-        )
-        self.session_id = res.cookies.get(self.session_cookie_name)
-        self.ecourts_token = res.cookies.get(self.ecourts_token_cookie_name)
+    def init_user_session(self, retries=0):
+        try:
+            res = requests.request(
+            "GET", "https://judgments.ecourts.gov.in/pdfsearch/", verify=False, timeout=10
+            )
+            self.session_id = res.cookies.get(self.session_cookie_name)
+            self.ecourts_token = res.cookies.get(self.ecourts_token_cookie_name)
+        except Exception as e:
+            print("Error when initializing session", e)
+            if retries < 3:
+                print("Retrying session initialization")
+                self.init_user_session(retries + 1)
+
 
     def get_cookie(self):
         return f"{self.ecourts_token_cookie_name}={self.ecourts_token}; {self.session_cookie_name}={self.session_id}"
@@ -322,16 +372,29 @@ class Downloader:
 
 def run():
     court_codes = COURT_CODES_ALL
+    print("enter start date in format yyyy-mm-dd")
 
-    def process(court_code):
+    start_date = "2024-03-01"
+    end_date = "2024-03-03"
+    court_code = "8~9"
+    i = 0
+
+    def process(court_code, start_date, end_date, thread_no):
         try:
-            Downloader(court_code).download()
+            Downloader(court_code, start_date, end_date, thread_no).download()
         except Exception as e:
             traceback.print_exc()
             print("Error processing court", court_code, court_codes[court_code])
 
-    for code, name in court_codes.items():
-        process(code)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = []
+        all_dates = generate_date_tuples(start_date, end_date)
+
+        for date_tuple in all_dates:
+            futures.append(executor.submit(process, court_code, date_tuple[0], date_tuple[1], i))
+            i += 1
+
+        concurrent.futures.wait(futures)
 
 
 if __name__ == "__main__":

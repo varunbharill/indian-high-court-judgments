@@ -1,7 +1,10 @@
 from pathlib import Path
 import json
+from typing import Union
+
 import lxml.html as LH
 from tqdm import tqdm
+from lxml import etree
 
 src = Path("./data")
 
@@ -26,12 +29,13 @@ class MetadataProcessor:
             return
         html_s = metadata["raw_html"]
         html_element = LH.fromstring(html_s)
+        pretty_html = etree.tostring(html_element, pretty_print=True).decode("utf-8")
         title = html_element.xpath("./button//text()")[0].strip()
         description_elem = html_element.xpath("./text()")
         description = description_elem[0].strip() if description_elem else None
         case_details = {
             "court_code": metadata["court_code"],
-            "court_number": metadata["court_number"],
+            # "court_number": metadata["court_number"],
             "title": title,
             "description": description,
         }
@@ -55,8 +59,12 @@ class MetadataProcessor:
             .split(":")[1]
             .strip()
         )
+        judge_elements = html_element.xpath('.//strong[contains(text(), "Judge")]/text()')
+        if judge_elements and len(judge_elements) > 0:
+            case_details["Judge"] = judge_elements[0].split(":")[1].strip().split(",")
+        print(json.dumps(case_details, indent=2))
 
-    def load_metadata(self, file: Path | str) -> dict:
+    def load_metadata(self, file: Union[Path, str]) -> dict:
         with open(file) as f:
             return json.load(f)
 
