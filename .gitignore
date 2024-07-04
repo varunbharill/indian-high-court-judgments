@@ -1,3 +1,4 @@
 data/
 .DS_Store
 tmp/
+ec2_setup_script
